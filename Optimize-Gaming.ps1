@@ -149,11 +149,13 @@ function Set-Reg {
     if ($OnlyIfExists -and -not (Test-Path -LiteralPath $Path)) { return }
     Invoke-Change "reg $Path : $Name = $Value" {
         if (-not (Test-Path -LiteralPath $Path)) {
-            New-Item -Path $Path -Force | Out-Null
+            New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
             $script:UndoLog.Add([pscustomobject]@{ Type = 'regkey'; Path = $Path })
         }
         Save-RegState $Path $Name
-        New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+        # -ErrorAction Stop: sem ele um acesso negado e erro NAO-terminante, o catch do Invoke-Change nao o ve,
+        # a falha sai como erro cru no console e ainda e contada como alteracao aplicada.
+        New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType $Type -Force -ErrorAction Stop | Out-Null
     }
 }
 
@@ -328,8 +330,8 @@ function Set-DefaultUserValues {
             foreach ($v in $Values) {
                 $p = 'Registry::HKEY_USERS\GamingSetupDefault\' + $v[0]
                 if ($v[2] -eq '__DELETE__') { Remove-ItemProperty -Path $p -Name $v[1] -ErrorAction SilentlyContinue; continue }
-                if (-not (Test-Path -LiteralPath $p)) { New-Item -Path $p -Force | Out-Null }
-                New-ItemProperty -LiteralPath $p -Name $v[1] -Value $v[2] -PropertyType $v[3] -Force | Out-Null
+                if (-not (Test-Path -LiteralPath $p)) { New-Item -Path $p -Force -ErrorAction Stop | Out-Null }
+                New-ItemProperty -LiteralPath $p -Name $v[1] -Value $v[2] -PropertyType $v[3] -Force -ErrorAction Stop | Out-Null
             }
         } finally {
             for ($i = 0; $i -lt 6; $i++) {
@@ -512,7 +514,8 @@ function Step-Privacy {
     Set-Reg "$pol\CloudContent" 'DisableSoftLanding' 1
     Set-Reg "$pol\CloudContent" 'DisableCloudOptimizedContent' 1
     Set-Reg "$pol\CloudContent" 'DisableTailoredExperiencesWithDiagnosticData' 1
-    Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications' 'ConfigureChatAutoInstall' 0
+    # Nao escrevemos HKLM\...\CurrentVersion\Communications\ConfigureChatAutoInstall: a ACL da chave so permite
+    # TrustedInstaller (nem Administrador grava) e o valor so valia para o Chat do 22H2. O Teams e removido no debloat.
     Set-Reg "$pol\Windows Search" 'AllowCortana' 0
     Set-Reg "$pol\Windows Search" 'DisableWebSearch' 1
     Set-Reg "$pol\Windows Search" 'ConnectedSearchUseWeb' 0
@@ -617,7 +620,7 @@ function Restore-KnownFolders {
                 if ($LASTEXITCODE -ge 8) { throw "robocopy falhou (codigo $LASTEXITCODE); registro mantido" }
             }
             Save-RegState $key $name
-            New-ItemProperty -Path $key -Name $name -Value ('%USERPROFILE%\' + $map[$name]) -PropertyType ExpandString -Force | Out-Null
+            New-ItemProperty -Path $key -Name $name -Value ('%USERPROFILE%\' + $map[$name]) -PropertyType ExpandString -Force -ErrorAction Stop | Out-Null
         }
     }
 }
@@ -964,8 +967,8 @@ function Invoke-Undo {
             'reg' {
                 Invoke-Change "restaurar $($e.Path) : $($e.Name)" {
                     if ($e.Existed) {
-                        if (-not (Test-Path -LiteralPath $e.Path)) { New-Item -Path $e.Path -Force | Out-Null }
-                        New-ItemProperty -LiteralPath $e.Path -Name $e.Name -Value $e.Value -PropertyType $e.Kind -Force | Out-Null
+                        if (-not (Test-Path -LiteralPath $e.Path)) { New-Item -Path $e.Path -Force -ErrorAction Stop | Out-Null }
+                        New-ItemProperty -LiteralPath $e.Path -Name $e.Name -Value $e.Value -PropertyType $e.Kind -Force -ErrorAction Stop | Out-Null
                     } else {
                         Remove-ItemProperty -LiteralPath $e.Path -Name $e.Name -ErrorAction SilentlyContinue
                     }
