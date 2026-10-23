@@ -11,9 +11,10 @@
       4. Apps inuteis + gatilhos de reinstalacao do Windows Update
       5. Desempenho (somente ajustes com respaldo)
       6. Runtimes (Visual C++, DirectX) via winget
-      7. Drivers AMD (chipset silencioso; Adrenalin baixado, verificado e aberto) - pula se ja atualizado
-      8. Bloqueia drivers via Windows Update (DEPOIS dos drivers) e define o plano de energia
-      9. Limpeza, resumo, diagnostico de BIOS (Resizable BAR, RAM) e arquivo de undo
+      7. Brave: instala via winget se nao estiver instalado e desliga a IA (Leo) por politica oficial
+      8. Drivers AMD (chipset silencioso; Adrenalin baixado, verificado e aberto) - pula se ja atualizado
+      9. Bloqueia drivers via Windows Update (DEPOIS dos drivers) e define o plano de energia
+     10. Limpeza, resumo, diagnostico de BIOS (Resizable BAR, RAM) e arquivo de undo
 
     Nao mexe em: Windows Update, Defender, Microsoft Store, winget, Xbox/Gaming Services, Edge (so politicas).
     Use -DryRun para ver tudo SEM alterar nada. Use -Undo latest para desfazer registro/servicos/tarefas.
@@ -37,6 +38,7 @@ param(
     [switch]$SkipDebloat,        # Pula remocao de apps e recursos opcionais
     [switch]$SkipPerformance,    # Pula ajustes de desempenho
     [switch]$SkipRuntimes,       # Pula Visual C++ / DirectX
+    [switch]$SkipBrave,          # Nao instala o Brave nem aplica as politicas anti-IA dele
     [switch]$SkipDrivers,        # Pula drivers AMD
     [switch]$ForceDrivers,       # Reinstala drivers mesmo que ja estejam na versao mais nova
     [switch]$AllowWUDrivers,     # NAO bloqueia drivers via Windows Update
@@ -196,12 +198,13 @@ function Invoke-WithTimeout {
 }
 
 function Install-WingetPackage {
-    param([string]$Id)
+    param([string]$Id, [ValidateSet('', 'machine', 'user')][string]$Scope = '')
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Warn2 "winget indisponivel; pulando $Id"; return }
-    Invoke-Change "winget install $Id" {
-        $code = Invoke-WithTimeout -FilePath 'winget' -NoNewWindow -TimeoutSec 600 -ArgumentList @(
-            'install', '--id', $Id, '--exact', '--silent', '--source', 'winget',
-            '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+    $wa = @('install', '--id', $Id, '--exact', '--silent', '--source', 'winget',
+        '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+    if ($Scope) { $wa += '--scope', $Scope }
+    Invoke-Change "winget install $Id$(if ($Scope) { " ($Scope)" })" {
+        $code = Invoke-WithTimeout -FilePath 'winget' -NoNewWindow -TimeoutSec 600 -ArgumentList $wa
         # -1978335189 = nada a atualizar ; -1978335135 = ja instalado
         if ($code -ne 0 -and $code -ne -1978335189 -and $code -ne -1978335135) { throw "winget retornou $code" }
     }
@@ -815,6 +818,51 @@ function Step-Runtimes {
     foreach ($id in 'Microsoft.VCRedist.2015+.x64', 'Microsoft.VCRedist.2015+.x86', 'Microsoft.DirectX') { Install-WingetPackage $id }
 }
 
+function Get-BravePath {
+    # Instalacao por maquina (Program Files) ou por usuario (AppData); App Paths cobre pastas fora do padrao.
+    $cand = @()
+    foreach ($base in $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) {
+        if ($base) { $cand += Join-Path $base 'BraveSoftware\Brave-Browser\Application\brave.exe' }
+    }
+    foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\brave.exe', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\brave.exe') {
+        $v = (Get-ItemProperty -LiteralPath $k -ErrorAction SilentlyContinue).'(default)'
+        if ($v) { $cand += $v.Trim('"') }
+    }
+    return $cand | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
+
+function Step-Brave {
+    Write-Title 'Brave: instalar (se faltar) e desligar a IA'
+    if ($SkipBrave) { Write-Skip '-SkipBrave'; return }
+
+    $exe = Get-BravePath
+    if ($exe) {
+        Write-Ok "Brave ja instalado: $exe"
+    } elseif ($script:Offline) {
+        Write-Warn2 'Brave nao encontrado e sem internet: nao foi instalado. As politicas abaixo sao gravadas mesmo assim e valem quando ele for instalado.'
+    } else {
+        Write-Info 'Brave nao encontrado; instalando pelo winget (Brave.Brave, para todos os usuarios)...'
+        Install-WingetPackage 'Brave.Brave' -Scope machine
+        if (-not $DryRun) {
+            $exe = Get-BravePath
+            if ($exe) { Write-Ok "Brave instalado: $exe" }
+            else { Write-Warn2 'brave.exe nao foi encontrado depois do winget; as politicas sao gravadas mesmo assim e valem quando ele for instalado.' }
+        }
+    }
+
+    # Politicas oficiais do Brave (definicoes em brave-core: components/policy/resources/templates/policy_definitions/BraveSoftware).
+    # Em HKLM valem para todos os perfis e o usuario nao consegue religar pelas configuracoes. O Brave mostra
+    # "gerenciado pela sua organizacao" depois disso, como no Edge.
+    $pol = 'HKLM:\SOFTWARE\Policies\BraveSoftware\Brave'
+    Set-Reg $pol 'BraveAIChatEnabled' 0    # Leo (AI Chat): com false o brave-core trata o recurso inteiro como desativado
+    Set-Reg $pol 'BraveLocalAIEnabled' 0   # IA local (busca semantica no historico, modelo baixado no PC); Brave com Chromium 149+
+
+    if (Get-Process -Name brave -ErrorAction SilentlyContinue) {
+        Write-Warn2 'O Brave esta aberto: feche todas as janelas e abra de novo para as politicas valerem.'
+    }
+    Write-Info 'Confira em brave://policy (BraveAIChatEnabled e BraveLocalAIEnabled = false). O "Responder com IA" da Brave Search e configuracao do site (search.brave.com/settings), nao do navegador.'
+}
+
 function Step-Drivers {
     Write-Title 'Drivers AMD (chipset + Radeon)'
     if ($SkipDrivers) { Write-Skip '-SkipDrivers'; return }
@@ -983,7 +1031,7 @@ function Invoke-Undo {
         }
     }
     Write-Host ''
-    Write-Host 'Desfeito: registro, servicos, tarefas, energia e hibernacao. NAO desfeito: apps removidos, OneDrive, perfil Default, drivers.' -ForegroundColor Yellow
+    Write-Host 'Desfeito: registro, servicos, tarefas, energia e hibernacao. NAO desfeito: apps removidos, OneDrive, perfil Default, drivers, Brave instalado.' -ForegroundColor Yellow
     Write-Host 'Reinicie o PC para concluir.'
 }
 
@@ -1021,7 +1069,7 @@ function Invoke-Main {
 
     if (-not $DryRun -and -not $Yes) {
         Write-Host ''
-        Write-Host 'Isto vai alterar configuracoes do Windows, remover apps e instalar drivers.' -ForegroundColor Yellow
+        Write-Host 'Isto vai alterar configuracoes do Windows, remover apps, instalar drivers (e o Brave, se faltar).' -ForegroundColor Yellow
         Write-Host 'Um ponto de restauracao e um arquivo de undo serao criados. Use -DryRun para so visualizar.'
         $r = Read-Host 'Continuar? (S/N)'
         if ($r -notmatch '^[sSyY]') { Write-Host 'Cancelado.'; return }
@@ -1038,7 +1086,7 @@ function Invoke-Main {
     try {
         # Cada etapa e isolada: se uma falhar, as demais continuam. Abort so ocorre antes de qualquer alteracao.
         foreach ($step in 'Step-Preflight', 'Step-RestorePoint', 'Step-Privacy', 'Step-OneDrive', 'Step-Debloat', 'Step-Performance',
-            'Step-Runtimes', 'Step-Drivers', 'Step-WUDriverPolicy', 'Step-PowerPlan') {
+            'Step-Runtimes', 'Step-Brave', 'Step-Drivers', 'Step-WUDriverPolicy', 'Step-PowerPlan') {
             if ($script:Abort) { Write-Warn2 'Execucao interrompida antes de qualquer alteracao.'; break }
             try { & $step }
             catch { $script:Stats.Fail++; Write-Warn2 "$step falhou: $($_.Exception.Message)" }
