@@ -97,7 +97,7 @@ $CdmValues = 'ContentDeliveryAllowed', 'OemPreInstalledAppsEnabled', 'PreInstall
     'SilentInstalledAppsEnabled', 'SoftLandingEnabled', 'SystemPaneSuggestionsEnabled', 'SubscribedContentEnabled',
     'SubscribedContent-310093Enabled', 'SubscribedContent-314563Enabled', 'SubscribedContent-338387Enabled',
     'SubscribedContent-338388Enabled', 'SubscribedContent-338389Enabled', 'SubscribedContent-338393Enabled',
-    'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled', 'SubscribedContent-88000326Enabled',
+    'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled', 'SubscribedContent-353698Enabled', 'SubscribedContent-88000326Enabled',
     'RotatingLockScreenEnabled', 'RotatingLockScreenOverlayEnabled', 'FeatureManagementEnabled'
 
 # ----------------------------------------------------------------------------------------------
@@ -135,12 +135,13 @@ function Save-UndoLog {
 function Save-RegState {
     param([string]$Path, [string]$Name)
     $existed = $false; $val = $null; $kind = $null
+    $raw = $Name; if ($Name -eq '(default)') { $raw = '' }   # o provider chama o valor padrao de '(default)'; a API, de ''
     try {
         $item = Get-Item -LiteralPath $Path -ErrorAction Stop
-        if ($item.GetValueNames() -contains $Name) {
+        if ($item.GetValueNames() -contains $raw) {
             $existed = $true
-            $val  = $item.GetValue($Name, $null, 'DoNotExpandEnvironmentNames')
-            $kind = $item.GetValueKind($Name).ToString()
+            $val  = $item.GetValue($raw, $null, 'DoNotExpandEnvironmentNames')
+            $kind = $item.GetValueKind($raw).ToString()
         }
     } catch { }
     $script:UndoLog.Add([pscustomobject]@{ Type = 'reg'; Path = $Path; Name = $Name; Existed = $existed; Value = $val; Kind = $kind })
@@ -419,6 +420,15 @@ function Show-Diagnostics {
         } else { Write-Info 'Integridade de memoria (HVCI) esta desligada.' }
     } catch { }
     try {
+        # O Windows 11 24H2 liga a criptografia do dispositivo sozinho ao entrar com conta Microsoft. Formatar sem
+        # a chave de recuperacao em maos pode deixar outros discos/particoes criptografados inacessiveis.
+        $bl = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop
+        if ($bl.VolumeStatus -ne 'FullyDecrypted') {
+            Write-Info ("BitLocker LIGADO em {0} ({1}). Guarde a chave de recuperacao: https://aka.ms/myrecoverykey" -f $env:SystemDrive, $bl.VolumeStatus)
+            Write-Info ("   O script nao mexe nisso. Para desligar (decisao sua, menos protecao se o PC for roubado): manage-bde -off $env:SystemDrive")
+        } else { Write-Info 'BitLocker desligado no disco do sistema.' }
+    } catch { Write-Skip 'BitLocker: nao consegui consultar' }
+    try {
         $hw = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name HwSchMode -ErrorAction SilentlyContinue).HwSchMode
         $state = 'padrao do driver'; if ($hw -eq 2) { $state = 'LIGADO' } elseif ($hw -eq 1) { $state = 'desligado' }
         Write-Info "Agendamento de GPU por hardware (HAGS): $state."
@@ -449,6 +459,24 @@ function Step-Preflight {
             $script:Abort = $true; return
         }
     } else { Write-Ok 'Nenhum reinicio pendente.' }
+
+    # Os ajustes HKCU vao para a conta que roda o script. Se o UAC foi aprovado com OUTRA conta de administrador,
+    # eles cairiam no perfil errado sem nenhum erro. Compara com o dono do Explorer da MESMA sessao.
+    $owner = $null
+    try {
+        $sid = [Diagnostics.Process]::GetCurrentProcess().SessionId
+        $ex  = Get-CimInstance Win32_Process -Filter "Name='explorer.exe' AND SessionId=$sid" -ErrorAction Stop | Select-Object -First 1
+        if ($ex) { $owner = (Invoke-CimMethod -InputObject $ex -MethodName GetOwner -ErrorAction Stop).User }
+    } catch { Write-Skip "nao consegui identificar o usuario da sessao ($($_.Exception.Message))" }
+    if ($owner -and $owner -ne $env:USERNAME) {
+        Write-Warn2 "A sessao aberta e de '$owner', mas o script roda como '$env:USERNAME': ajustes por usuario (mouse, barra de tarefas, sugestoes) iriam para '$env:USERNAME'."
+        Write-Warn2 "   Entre como '$owner' (se ele for administrador) e rode de novo."
+        if ($DryRun -or $Yes) { Write-Warn2 'Continuando (-DryRun/-Yes).' }
+        else {
+            $r = Read-Host 'Continuar mesmo assim? (S/N)'
+            if ($r -notmatch '^[sSyY]') { $script:Abort = $true; return }
+        }
+    }
 
     try {
         $null = Invoke-WebRequest -Uri 'http://www.msftconnecttest.com/connecttest.txt' -UseBasicParsing -TimeoutSec 15
@@ -507,7 +535,7 @@ function Step-Privacy {
     Set-Reg "$pol\AppCompat" 'DisableUAR' 1
     Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\SQMClient\Windows' 'CEIPEnable' 0
     Set-Reg "$pol\Windows Error Reporting" 'Disabled' 1
-    Set-Reg "$pol\System" 'EnableActivityFeed' 0
+    # EnableActivityFeed nao e gravado: no Windows 11 nao existe Timeline e ha relatos (winutil) de que 0 quebra o Win+V.
     Set-Reg "$pol\System" 'PublishUserActivities' 0
     Set-Reg "$pol\System" 'UploadUserActivities' 0
     Set-Reg "$pol\AdvertisingInfo" 'DisabledByGroupPolicy' 1
@@ -517,14 +545,28 @@ function Step-Privacy {
     Set-Reg "$pol\CloudContent" 'DisableSoftLanding' 1
     Set-Reg "$pol\CloudContent" 'DisableCloudOptimizedContent' 1
     Set-Reg "$pol\CloudContent" 'DisableTailoredExperiencesWithDiagnosticData' 1
+    Set-Reg "$pol\CloudContent" 'DisableConsumerAccountStateContent' 1   # anuncios do Microsoft 365 na Home das Configuracoes
+    Set-Reg "$pol\Device Metadata" 'PreventDeviceMetadataFromNetwork' 1  # sem apps "companheiros" baixados ao plugar mouse/monitor
     # Nao escrevemos HKLM\...\CurrentVersion\Communications\ConfigureChatAutoInstall: a ACL da chave so permite
     # TrustedInstaller (nem Administrador grava) e o valor so valia para o Chat do 22H2. O Teams e removido no debloat.
     Set-Reg "$pol\Windows Search" 'AllowCortana' 0
     Set-Reg "$pol\Windows Search" 'DisableWebSearch' 1
     Set-Reg "$pol\Windows Search" 'ConnectedSearchUseWeb' 0
     Set-Reg "$pol\Windows Search" 'AllowSearchToUseLocation' 0
-    Set-Reg "$pol\WindowsAI" 'DisableAIDataAnalysis' 1          # Recall
+    # Recall: AllowRecallEnablement e politica de maquina; DisableAIDataAnalysis/DisableClickToDo sao de usuario na ADMX,
+    # entao vao nos dois lugares (mesma abordagem do Win11Debloat).
+    Set-Reg "$pol\WindowsAI" 'AllowRecallEnablement' 0
+    Set-Reg "$pol\WindowsAI" 'DisableAIDataAnalysis' 1
     Set-Reg "$pol\WindowsAI" 'DisableClickToDo' 1
+    Set-Reg 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1
+    Set-Reg 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' 'DisableClickToDo' 1
+    # Servico de IA do Windows (24H2+): manual em vez de automatico; continua disponivel se algo pedir
+    Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\WSAIFabricSvc' 'Start' 3 -OnlyIfExists
+    # IA do Bloco de Notas e do Paint (os apps em si sao mantidos)
+    Set-Reg 'HKLM:\SOFTWARE\Policies\WindowsNotepad' 'DisableAIFeatures' 1
+    foreach ($n in 'DisableCocreator', 'DisableGenerativeFill', 'DisableImageCreator', 'DisableGenerativeErase', 'DisableRemoveBackground') {
+        Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Paint' $n 1
+    }
     Set-Reg "$pol\WindowsCopilot" 'TurnOffWindowsCopilot' 1
     Set-Reg 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1
     Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0   # Widgets
@@ -538,7 +580,11 @@ function Step-Privacy {
             StartupBoostEnabled = 0; BackgroundModeEnabled = 0; HideFirstRunExperience = 1
             EdgeShoppingAssistantEnabled = 0; PersonalizationReportingEnabled = 0; MetricsReportingEnabled = 0
             DiagnosticData = 0; ShowRecommendationsEnabled = 0; HubsSidebarEnabled = 0; EdgeFollowEnabled = 0
-            UserFeedbackAllowed = 0; SpotlightExperiencesAndRecommendationsEnabled = 0 }.GetEnumerator()) {
+            UserFeedbackAllowed = 0; SpotlightExperiencesAndRecommendationsEnabled = 0
+            # anuncios/campanhas e IA (Copilot lendo a pagina, modelo local baixado em segundo plano)
+            NewTabPageContentEnabled = 0; DefaultBrowserSettingsCampaignEnabled = 0; ShowAcrobatSubscriptionButton = 0
+            WalletDonationEnabled = 0; CopilotPageContext = 0; CopilotCDPPageContext = 0; Microsoft365CopilotChatIconEnabled = 0
+            EdgeHistoryAISearchEnabled = 0; ComposeInlineEnabled = 0; GenAILocalFoundationalModelSettings = 1 }.GetEnumerator()) {
         Set-Reg $edge $kv.Key $kv.Value
     }
 
@@ -558,6 +604,13 @@ function Step-Privacy {
     Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings' 'IsAADCloudSearchEnabled' 0
     Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings' 'IsMSACloudSearchEnabled' 0
     Set-Reg 'HKCU:\Software\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions' 1
+    Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowCopilotButton' 0
+    Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications' 'EnableAccountNotifications' 0
+    Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Mobility' 'OptedIn' 0   # sugestoes do Phone Link
+    # Notificacoes de propaganda (servicos Microsoft) e lembrete de backup do OneDrive
+    foreach ($toast in 'Windows.SystemToast.Suggested', 'Windows.SystemToast.BackupReminder') {
+        Set-Reg "HKCU:\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\$toast" 'Enabled' 0
+    }
 
     # Mesmos ajustes anti-sugestao para NOVOS usuarios (perfil Default), senao uma conta nova volta a receber apps sugeridos
     $def = @()
@@ -567,6 +620,7 @@ function Step-Privacy {
     $def += , @('Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement', 'ScoobeSystemSettingEnabled', 0, 'DWord')
     $def += , @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'Start_IrisRecommendations', 0, 'DWord')
     $def += , @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'ShowSyncProviderNotifications', 0, 'DWord')
+    $def += , @('Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Suggested', 'Enabled', 0, 'DWord')
     Set-DefaultUserValues -Values $def -Desc 'sem apps/sugestoes automaticos'
 
     # Servicos de telemetria/recursos que ninguem usa num PC de jogos
@@ -700,9 +754,11 @@ function Step-Debloat {
         'Microsoft.Print3D', 'Microsoft.Whiteboard', 'Microsoft.NetworkSpeedTest', 'Microsoft.OneConnect', 'Microsoft.PCManager',
         'MicrosoftCorporationII.MicrosoftFamily', 'MicrosoftCorporationII.QuickAssist', 'Microsoft.Wallet', 'Microsoft.WindowsAlarms',
         'Microsoft.WindowsSoundRecorder', 'Microsoft.WindowsCamera', 'Microsoft.MicrosoftJournal', 'Microsoft.XboxSpeechToTextOverlay',
+        'Microsoft.Windows.AIHub', 'Microsoft.M365Companions', 'Microsoft.BingFoodAndDrink', 'Microsoft.BingHealthAndFitness',
+        'Microsoft.BingTravel', 'Microsoft.3DBuilder', 'Microsoft.Messaging', 'Microsoft.MicrosoftPowerBIForWindows',
         # promocionais de terceiros (aparecem em instalacoes OEM / contas novas)
         '*CandyCrush*', '*king.com*', '*Spotify*', '*Disney*', '*TikTok*', '*Facebook*', '*Instagram*', '*Twitter*',
-        '*Netflix*', '*PrimeVideo*', '*LinkedIn*', '*Duolingo*', '*Pinterest*', '*McAfee*', '*Norton*'
+        '*Netflix*', '*PrimeVideo*', '*LinkedIn*', '*Duolingo*', '*Pinterest*', '*McAfee*', '*Norton*', 'Amazon.com.Amazon', '*Hulu*'
     )
     if (-not $KeepGameBar) { $remove += 'Microsoft.XboxGamingOverlay' }   # Xbox Game Bar (Radeon Software tem captura propria)
 
@@ -727,17 +783,24 @@ function Step-Debloat {
     # Gatilhos do Windows Update que reinstalam apps depois do OOBE (so existem em algumas builds)
     foreach ($w in 'OutlookUpdate', 'DevHomeUpdate', 'CrossDeviceUpdate') { Remove-UpdateWorker $w }
 
+    # WPBT: tabela da BIOS que deixa o fabricante da placa-mae rodar um instalador a cada boot (e assim que
+    # Armoury Crate / MSI Center / GCC aparecem sozinhos depois de formatar). Valor nao documentado pela Microsoft,
+    # usado pelo winutil; o Windows ignora se a BIOS nao tiver WPBT. Os drivers AMD vem pelo proprio script.
+    Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' 'DisableWpbtExecution' 1
+
     if (-not $KeepGameBar) {
         # Sem o app da Game Bar, alguns jogos/controles disparam o aviso "preciso de um novo app para abrir ms-gamingoverlay".
-        foreach ($proto in 'ms-gamingoverlay', 'ms-gamebar') {
+        # So o protocolo nao basta: sem comando e sem NoOpenWith o Windows mostra o seletor "Como deseja abrir?".
+        # O comando aponta para systray.exe, que nao faz nada visivel (mesma abordagem do Win11Debloat).
+        foreach ($proto in 'ms-gamingoverlay', 'ms-gamebar', 'ms-gamebarservices') {
             $kp = "Registry::HKEY_CLASSES_ROOT\$proto"
-            if (Test-Path -LiteralPath $kp) { continue }
-            Invoke-Change "registrar protocolo vazio $proto (evita aviso de app ausente)" {
-                [Microsoft.Win32.Registry]::SetValue("HKEY_CLASSES_ROOT\$proto", '', "URL:$proto")      # valor padrao
-                [Microsoft.Win32.Registry]::SetValue("HKEY_CLASSES_ROOT\$proto", 'URL Protocol', '')
-                $script:UndoLog.Add([pscustomobject]@{ Type = 'regkey'; Path = $kp })
-            }
+            if (Test-Path -LiteralPath "$kp\shell\open\command") { continue }
+            Set-Reg $kp '(default)' "URL:$proto" 'String'
+            Set-Reg $kp 'URL Protocol' '' 'String'
+            Set-Reg $kp 'NoOpenWith' '' 'String'
+            Set-Reg "$kp\shell\open\command" '(default)' '%SystemRoot%\System32\systray.exe' 'ExpandString'
         }
+        Set-Reg 'HKCU:\Software\Microsoft\GameBar' 'UseNexusForGameBarEnabled' 0   # botao Xbox do controle nao tenta abrir a Game Bar
     }
 
     # Recursos opcionais legados / sem uso (lista lida uma vez; a consulta e lenta)
@@ -791,6 +854,7 @@ function Step-Performance {
     Set-Reg $adv 'ShowTaskViewButton' 0
     Set-Reg $adv 'TaskbarMn' 0
     Set-Reg $adv 'TaskbarDa' 0                      # pode ser bloqueado pelo Windows; se falhar, desligue em Configuracoes
+    Set-Reg "$adv\TaskbarDeveloperSettings" 'TaskbarEndTask' 1   # "Finalizar tarefa" no clique direito da barra (jogo travado)
     Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' 'SearchboxTaskbarMode' 1
     Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize' 'StartupDelayInMSec' 0
 

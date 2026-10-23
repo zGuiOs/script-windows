@@ -37,15 +37,15 @@ Cada etapa é isolada: se uma falhar, as outras continuam. Só as pré-checagens
 |---|---|---|
 | 0 | Pré-checagens | Windows 11, reinício pendente (aborta), internet, espaço em disco |
 | 1 | Ponto de restauração | Cria e **verifica** que foi criado; se falhar, pergunta antes de continuar |
-| 2 | Telemetria/privacidade | Políticas de diagnóstico, serviço `DiagTrack` e ~17 tarefas de coleta, anúncios, sugestões, Bing na busca, Widgets, Copilot, Recall. Aplica o anti-sugestão também ao **perfil Default** (contas novas) |
+| 2 | Telemetria/privacidade | Políticas de diagnóstico, serviço `DiagTrack` e ~17 tarefas de coleta, anúncios, sugestões e notificações de propaganda, Bing na busca, Widgets, Copilot, Recall/Click to Do, IA do Bloco de Notas, do Paint e do Edge, apps "companheiros" baixados ao plugar periféricos. Aplica o anti-sugestão também ao **perfil Default** (contas novas) |
 | 3 | OneDrive | Desinstala, remove auto-start (usuário atual e Default), bloqueia uso por política. Sobras são apagadas só depois de reiniciar o Explorer |
-| 4 | Bloatware | Remove apps (inclusive o pacote **provisionado**, para não voltar em contas novas) e os gatilhos do Windows Update que reinstalam Outlook/Dev Home/Phone Link (com backup `.reg`) |
-| 5 | Desempenho | Game Mode, Game DVR off, HAGS, mouse sem aceleração, sem Sticky Keys, hibernação off, interface enxuta |
+| 4 | Bloatware | Remove apps (inclusive o pacote **provisionado**, para não voltar em contas novas) e os gatilhos do Windows Update que reinstalam Outlook/Dev Home/Phone Link (com backup `.reg`). Desliga o **WPBT** (instaladores que a BIOS da placa-mãe injeta a cada boot, como Armoury Crate/MSI Center). Sem a Game Bar, registra handlers vazios para `ms-gamingoverlay`/`ms-gamebar` (sem pop-up de "app ausente") |
+| 5 | Desempenho | Game Mode, Game DVR off, HAGS, mouse sem aceleração, sem Sticky Keys, hibernação off, interface enxuta, "Finalizar tarefa" no clique direito da barra |
 | 6 | Runtimes | Visual C++ e DirectX via `winget` (com tempo limite) |
 | 7 | Brave | Se o Brave não estiver instalado, instala via `winget` (`Brave.Brave`, para todos os usuários). Em ambos os casos desliga a IA por política oficial (veja abaixo) |
 | 8 | Drivers AMD | Chipset silencioso e Adrenalin (baixa, valida assinatura, abre o instalador). **Pula se já está na versão mais nova** |
 | 9 | Drivers via Windows Update | Bloqueia o Windows Update de empurrar drivers — **depois** dos drivers instalados |
-| 10 | Plano de energia, limpeza, resumo | Plano de energia (depois do chipset, que pode mexer nele), diagnóstico de BIOS, arquivo de undo |
+| 10 | Plano de energia, limpeza, resumo | Plano de energia (depois do chipset, que pode mexer nele), diagnóstico de BIOS e BitLocker (só leitura), arquivo de undo |
 
 ## Brave sem IA
 
@@ -119,3 +119,7 @@ Desfaz **registro, serviços, tarefas agendadas, plano de energia e hibernação
 - Chipset: [AMD Chipset Drivers (AM4)](https://www.amd.com/en/support/downloads/drivers.html/chipsets/am4/b550.html)
 
 Os downloads da AMD exigem o cabeçalho `Referer` (sem ele o servidor devolve uma página HTML); o script já envia.
+
+## Referências
+
+Ao evoluir o script, consultamos estes projetos e adotamos só o que é seguro, reversível pelo `-Undo` e compatível com o padrão daqui: [rivaed/Windows11-Debloat](https://github.com/rivaed/Windows11-Debloat), [ChrisTitusTech/winutil](https://github.com/ChrisTitusTech/winutil) e [Raphire/Win11Debloat](https://github.com/Raphire/Win11Debloat).
