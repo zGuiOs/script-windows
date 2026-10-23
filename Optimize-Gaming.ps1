@@ -63,7 +63,7 @@ $ProgressPreference    = 'SilentlyContinue'     # Invoke-WebRequest fica MUITO m
 
 $script:BoundParams  = $PSBoundParameters
 $script:ScriptPath   = $PSCommandPath
-$script:Stats        = @{ Ok = 0; Fail = 0 }
+$script:Stats        = @{ Ok = 0; Fail = 0; Dry = 0 }
 $script:NeedsReboot  = $false
 $script:LogStarted   = $false
 $script:Abort        = $false
@@ -113,7 +113,7 @@ function Write-Dry   { param([string]$m) Write-Host "  [DRY] $m" -ForegroundColo
 # Toda alteracao no sistema passa por aqui. Em -DryRun apenas descreve o que faria.
 function Invoke-Change {
     param([string]$Desc, [scriptblock]$Action)
-    if ($DryRun) { Write-Dry $Desc; return }
+    if ($DryRun) { $script:Stats.Dry++; Write-Dry $Desc; return }
     try {
         & $Action
         $script:Stats.Ok++
@@ -1031,6 +1031,7 @@ function Step-PowerPlan {
 function Step-Finish {
     Write-Title 'Resumo'
     if ($DryRun) {
+        Write-Host ("Alteracoes previstas: {0} (nenhuma aplicada). Itens ja no estado desejado nao aparecem na lista." -f $script:Stats.Dry)
         Show-Diagnostics
         Write-Host ''
         Write-Host 'DryRun concluido: NADA foi alterado. Rode sem -DryRun para aplicar.' -ForegroundColor Yellow
