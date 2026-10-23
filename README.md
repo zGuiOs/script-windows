@@ -42,9 +42,23 @@ Cada etapa é isolada: se uma falhar, as outras continuam. Só as pré-checagens
 | 4 | Bloatware | Remove apps (inclusive o pacote **provisionado**, para não voltar em contas novas) e os gatilhos do Windows Update que reinstalam Outlook/Dev Home/Phone Link (com backup `.reg`) |
 | 5 | Desempenho | Game Mode, Game DVR off, HAGS, mouse sem aceleração, sem Sticky Keys, hibernação off, interface enxuta |
 | 6 | Runtimes | Visual C++ e DirectX via `winget` (com tempo limite) |
-| 7 | Drivers AMD | Chipset silencioso e Adrenalin (baixa, valida assinatura, abre o instalador). **Pula se já está na versão mais nova** |
-| 8 | Drivers via Windows Update | Bloqueia o Windows Update de empurrar drivers — **depois** dos drivers instalados |
-| 9 | Plano de energia, limpeza, resumo | Plano de energia (depois do chipset, que pode mexer nele), diagnóstico de BIOS, arquivo de undo |
+| 7 | Brave | Se o Brave não estiver instalado, instala via `winget` (`Brave.Brave`, para todos os usuários). Em ambos os casos desliga a IA por política oficial (veja abaixo) |
+| 8 | Drivers AMD | Chipset silencioso e Adrenalin (baixa, valida assinatura, abre o instalador). **Pula se já está na versão mais nova** |
+| 9 | Drivers via Windows Update | Bloqueia o Windows Update de empurrar drivers — **depois** dos drivers instalados |
+| 10 | Plano de energia, limpeza, resumo | Plano de energia (depois do chipset, que pode mexer nele), diagnóstico de BIOS, arquivo de undo |
+
+## Brave sem IA
+
+O script detecta o Brave em `Program Files`, em `%LOCALAPPDATA%` (instalação por usuário) e pelo registro `App Paths`. Se não achar e houver internet, instala com `winget install Brave.Brave --scope machine`. Depois, **sempre** grava as políticas oficiais em `HKLM\SOFTWARE\Policies\BraveSoftware\Brave` (mesmo sem o Brave instalado, para valerem quando ele for instalado):
+
+| Política | Valor | Efeito |
+|---|---|---|
+| `BraveAIChatEnabled` | `0` | Desliga o **Leo** (AI Chat). No código do Brave, com a política em `false` o recurso inteiro é tratado como desativado e o usuário não consegue religar |
+| `BraveLocalAIEnabled` | `0` | Desliga a **IA local** (busca semântica no histórico) e impede o download do modelo no PC. Existe a partir do Chromium 149 (Brave 1.93); em versões mais antigas aparece como política desconhecida, sem efeito |
+
+Os nomes foram conferidos nas definições oficiais do [brave-core](https://github.com/brave/brave-core/tree/master/components/policy/resources/templates/policy_definitions/BraveSoftware) e no artigo [Group Policy](https://support.brave.app/hc/articles/360039248271) do Brave. Para conferir: abra `brave://policy` (feche e reabra o Brave se ele estava aberto). O Brave passa a mostrar "gerenciado pela sua organização".
+
+Limites: o "Responder com IA" da **Brave Search** é configuração do site (`search.brave.com/settings`), não do navegador, então nenhuma política do Brave o desliga. Rewards, Wallet, VPN e News **não** são alterados (não são IA); dá para desligá-los com `BraveRewardsDisabled`, `BraveWalletDisabled`, `BraveVPNDisabled` e `BraveNewsDisabled` se quiser. `-Undo latest` remove as políticas; não desinstala o Brave.
 
 ## O que ele não mexe (de propósito)
 
@@ -66,7 +80,7 @@ Logs: `C:\ProgramData\GamingSetup\logs`. Cada execução grava `C:\ProgramData\G
 & ([scriptblock]::Create((irm <url>))) -Undo latest
 ```
 
-Desfaz **registro, serviços, tarefas agendadas, plano de energia e hibernação**. **Não** desfaz: apps removidos (o resumo lista quais; reinstale pela Microsoft Store/`winget`), OneDrive, perfil Default e drivers. O ponto de restauração do Windows também não traz apps removidos de volta.
+Desfaz **registro, serviços, tarefas agendadas, plano de energia e hibernação**. **Não** desfaz: apps removidos (o resumo lista quais; reinstale pela Microsoft Store/`winget`), OneDrive, perfil Default, drivers e a instalação do Brave (as políticas dele são desfeitas). O ponto de restauração do Windows também não traz apps removidos de volta.
 
 ## Opções
 
@@ -82,7 +96,7 @@ Desfaz **registro, serviços, tarefas agendadas, plano de energia e hibernação
 | `-RestoreKnownFolders` | Move Desktop/Documentos/Imagens de volta de dentro do OneDrive para `C:\Users\você` (pula pastas com arquivos só na nuvem) |
 | `-DisableVBS` | **Opcional**: desliga a Integridade de memória (+FPS em jogos limitados por CPU, −proteção) |
 | `-KeepGameBar`, `-KeepHibernation` | Mantém a Game Bar / a hibernação |
-| `-SkipPrivacy`, `-SkipOneDrive`, `-SkipDebloat`, `-SkipPerformance`, `-SkipRuntimes`, `-SkipDrivers`, `-NoRestorePoint`, `-IgnorePendingReboot` | Pulam etapas/checagens |
+| `-SkipPrivacy`, `-SkipOneDrive`, `-SkipDebloat`, `-SkipPerformance`, `-SkipRuntimes`, `-SkipBrave`, `-SkipDrivers`, `-NoRestorePoint`, `-IgnorePendingReboot` | Pulam etapas/checagens |
 | `-Reboot` | Reinicia sozinho no final |
 
 ## Desempenho: o que tem respaldo e o que não tem
